@@ -38,10 +38,9 @@ def validate_filename(filename: str) -> str:
 
 def download(filename: str, destination: Path) -> None:
     dbx = dropbox.Dropbox(oauth2_refresh_token=env("DROPBOX_REFRESH_TOKEN"), app_key=env("DROPBOX_APP_KEY"))
-    remote = f"{FOLDER}/{filename}"
     destination.parent.mkdir(parents=True, exist_ok=True)
     try:
-        metadata, response = dbx.files_download(remote)
+        metadata, response = dbx.files_download(f"{FOLDER}/{filename}")
         if not isinstance(metadata, dropbox.files.FileMetadata) or metadata.size <= 0:
             raise RuntimeError("Dropbox did not return a non-empty file.")
         total = 0
@@ -77,55 +76,55 @@ def youtube_client():
     return api, channels[0]
 
 
-def already_uploaded(api, channel_id: str, title: str) -> bool:
+def already_uploaded(api, channel_id: str, title: str) -> None:
     try:
         result = api.search().list(part="id", forMine=True, type="video", maxResults=50, q=title).execute()
         for item in result.get("items", []):
             vid = item.get("id", {}).get("videoId")
-            if not vid:
-                continue
-            found = api.videos().list(part="snippet,status", id=vid).execute().get("items", [])
-            if found and found[0].get("snippet", {}).get("channelId") == channel_id and found[0].get("snippet", {}).get("title") == title:
-                raise StateConflict("A video with this exact title already exists on the authenticated channel; reconcile state manually.")
+            if vid:
+                found = api.videos().list(part="snippet,status", id=vid).execute().get("items", [])
+                if found and found[0].get("snippet", {}).get("channelId") == channel_id and found[0].get("snippet", {}).get("title") == title:
+                    raise StateConflict("An exact-title video already exists on this channel; reserved item stays blocked for manual reconciliation.")
     except HttpError as exc:
         raise RuntimeError("YouTube duplicate check failed; refusing upload.") from exc
-    return False
 
 
 def run(filename: str, title: str, description: str):
     filename = validate_filename(filename)
-    title = title.strip()
-    description = description.strip()
+    title, description = title.strip(), description.strip()
     if not title or len(title) > 100 or not description:
         raise RuntimeError("Provide human-reviewed, non-empty title and description (title maximum 100 characters).")
     if re.fullmatch(r"\d+", title) or re.fullmatch(r"\d+", Path(filename).stem):
         raise RuntimeError("Numeric-only titles are refused. Enter metadata reviewed against the actual video content.")
 
-    # Reserve before contacting YouTube; a failed/interrupted attempt stays blocked until reviewed.
+    # Reservation is written before network actions. Any later failure remains reserved,
+    # which blocks automatic retry until a person reconciles the outcome.
     transition(filename, "reserve")
     video_path = Path("work/private-test-video.mp4")
     try:
-        download(filename, video_path)
-        api, channel = youtube_client()
-        already_uploaded(api, channel["id"], title)
-        body = {"snippet": {"title": title, "description": description, "categoryId": "22"},
-                "status": {"privacyStatus": "private"}}
-        request = api.videos().insert(part="snippet,status", body=body,
-                                      media_body=MediaFileUpload(str(video_path), mimetype="video/mp4", chunksize=8 * 1024 * 1024, resumable=True))
-        response = None
         try:
-            while response is None:
-                _, response = request.next_chunk()
-        except Exception as exc:
-            transition(filename, "uncertain")
-            raise RuntimeError("Upload outcome is uncertain; item remains blocked. Check YouTube Studio before any retry.") from exc
-        video_id = response.get("id")
-        if not video_id:
-            transition(filename, "uncertain")
-            raise RuntimeError("No video ID confirmed; item remains blocked. Check YouTube Studio before any retry.")
-        transition(filename, "complete", video_id)
-        print(f"Private upload confirmed for reviewed filename {filename!r}; video ID {video_id}.")
-        print("No schedule was set. Verify visibility in YouTube Studio before considering any separate next step.")
+            download(filename, video_path)
+            api, channel = youtube_client()
+            already_uploaded(api, channel["id"], title)
+            body = {"snippet": {"title": title, "description": description, "categoryId": "22"},
+                    "status": {"privacyStatus": "private"}}
+            request = api.videos().insert(part="snippet,status", body=body,
+                                          media_body=MediaFileUpload(str(video_path), mimetype="video/mp4", chunksize=8 * 1024 * 1024, resumable=True))
+            response = None
+            try:
+                while response is None:
+                    _, response = request.next_chunk()
+            except Exception as exc:
+                raise RuntimeError("Upload outcome is uncertain; item remains reserved. Check YouTube Studio before any retry.") from exc
+            video_id = response.get("id")
+            if not video_id:
+                raise RuntimeError("No video ID confirmed; item remains reserved. Check YouTube Studio before any retry.")
+            transition(filename, "complete", video_id)
+            print(f"Private upload confirmed for reviewed filename {filename!r}; video ID {video_id}.")
+            print("No schedule was set. Verify visibility in YouTube Studio before considering any separate next step.")
+        except Exception:
+            # Preserve the reservation as the durable fail-closed lock; never reset it automatically.
+            raise
     finally:
         video_path.unlink(missing_ok=True)
 
