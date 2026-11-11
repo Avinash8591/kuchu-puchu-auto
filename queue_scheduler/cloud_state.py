@@ -1,8 +1,4 @@
-"""Cloud-persistent queue state through GitHub repository Contents API.
-
-The Actions workflow serializes runs and this module makes every write conditional
-on the previously read blob SHA. Failed or uncertain reservations remain blocked.
-"""
+"""Cloud-persistent queue state through GitHub repository Contents API."""
 from __future__ import annotations
 
 import base64
@@ -24,12 +20,8 @@ class StateConflict(RuntimeError):
 
 
 def _request(url: str, token: str, method: str = "GET", body: dict | None = None):
-    headers = {
-        "Accept": "application/vnd.github+json",
-        "Authorization": f"Bearer {token}",
-        "X-GitHub-Api-Version": "2022-11-28",
-        "User-Agent": "kuchu-puchu-private-queue",
-    }
+    headers = {"Accept": "application/vnd.github+json", "Authorization": f"Bearer {token}",
+               "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "kuchu-puchu-private-queue"}
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
     try:
@@ -37,12 +29,14 @@ def _request(url: str, token: str, method: str = "GET", body: dict | None = None
             payload = response.read()
             return response.status, json.loads(payload) if payload else {}
     except urllib.error.HTTPError as exc:
-        payload = exc.read()
-        if exc.code == 409:
-            raise StateConflict("Cloud queue state changed concurrently; rerun after reviewing state.") from exc
+        exc.read()
+        if exc.code in {409, 422}:
+            raise StateConflict("Cloud queue state changed or could not be updated; inspect state before retrying.") from exc
+        if exc.code == 404 and method == "GET":
+            return 404, {}
         raise RuntimeError(f"GitHub state request failed with HTTP {exc.code}.") from exc
     except urllib.error.URLError as exc:
-        raise RuntimeError("GitHub state request failed; reservation outcome may be uncertain.") from exc
+        raise RuntimeError("GitHub state request failed; operation outcome may be uncertain.") from exc
 
 
 def _config():
@@ -60,7 +54,7 @@ def read():
     url = f"{API}/repos/{repo}/contents/{path}?ref={urllib.parse.quote(branch, safe='')}"
     status, result = _request(url, token)
     if status == 404:
-        return {"schema_version": 1, "items": {}}, None
+        raise StateConflict("Cloud state file is not initialized. Initialize it through the reviewed setup step first.")
     try:
         raw = base64.b64decode(result["content"]).decode("utf-8")
         state = json.loads(raw)
@@ -75,13 +69,9 @@ def write(state, expected_sha):
     repo, token, branch = _config()
     path = urllib.parse.quote(STATE_PATH, safe="/")
     url = f"{API}/repos/{repo}/contents/{path}"
-    body = {
-        "message": "Update private YouTube queue state",
-        "content": base64.b64encode((json.dumps(state, indent=2, sort_keys=True) + "\n").encode()).decode(),
-        "branch": branch,
-    }
-    if expected_sha:
-        body["sha"] = expected_sha
+    body = {"message": "Update private YouTube queue state",
+            "content": base64.b64encode((json.dumps(state, indent=2, sort_keys=True) + "\n").encode()).decode(),
+            "branch": branch, "sha": expected_sha}
     _request(url, token, "PUT", body)
 
 
