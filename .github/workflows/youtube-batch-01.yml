@@ -4,19 +4,24 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: Preflight checks files and settings only; schedule uploads are publicly released at their scheduled times
+        description: Preflight checks sources and settings only; scheduled items automatically become public at their dates
         required: true
         type: choice
         options:
           - preflight
           - schedule
       approval:
-        description: For a live public schedule only, enter APPROVE FIRST BATCH PUBLIC SCHEDULE after reviewing the PR and schedule conflicts
+        description: For live public scheduling only, enter APPROVE FIRST BATCH PUBLIC SCHEDULE after reviewing the PR
+        required: false
+        type: string
+      ledger_artifact_name:
+        description: Existing ledger artifact name when continuing a partial batch
         required: false
         type: string
 
 permissions:
-  contents: write
+  actions: read
+  contents: read
 
 concurrency:
   group: kuchu-puchu-first-batch-scheduler
@@ -29,6 +34,13 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+
+      - name: Download prior ledger when continuing
+        if: ${{ inputs.ledger_artifact_name != '' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.ledger_artifact_name }}
+          path: state
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -49,15 +61,11 @@ jobs:
           YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
         run: python scripts/youtube_batch_scheduler.py
 
-      - name: Persist upload ledger
-        if: always()
-        run: |
-          if [ -f state/batch-01-ledger.json ]; then
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add state/batch-01-ledger.json
-            if ! git diff --cached --quiet; then
-              git commit -m "Record first batch YouTube upload state"
-              git push
-            fi
-          fi
+      - name: Save resumable upload ledger
+        if: always() && hashFiles('state/batch-01-ledger.json') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: kuchu-puchu-batch-01-ledger-${{ github.run_id }}
+          path: state/batch-01-ledger.json
+          if-no-files-found: error
+          retention-days: 90
