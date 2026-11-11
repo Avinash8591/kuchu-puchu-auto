@@ -39,7 +39,7 @@ def download_one() -> None:
     filename = required_env("DROPBOX_FILENAME")
     if (
         Path(filename).name != filename
-        or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 ._()-]*\\.mp4", filename, re.IGNORECASE)
+        or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 ._()-]*\.mp4", filename, re.IGNORECASE)
         or filename in {".", ".."}
     ):
         raise RuntimeError("Filename must be one plain MP4 filename; paths and other extensions are refused.")
