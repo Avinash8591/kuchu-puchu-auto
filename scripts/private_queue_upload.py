@@ -14,15 +14,6 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT))
 
-import dropbox
-from dropbox.exceptions import ApiError, AuthError
-from google.auth.exceptions import RefreshError
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
-from googleapiclient.discovery import build
-from googleapiclient.errors import HttpError
-from googleapiclient.http import MediaFileUpload
-
 from queue_scheduler.cloud_state import StateConflict, transition
 
 FOLDER = "/kuchu puchu tap karo_"
@@ -37,13 +28,16 @@ def env(name: str) -> str:
 
 
 def validate_filename(filename: str) -> str:
-    if (Path(filename).name != filename or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 ._()-]*\.mp4", filename, re.I)
+    if (Path(filename).name != filename or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 ._()-]*\\.mp4", filename, re.I)
             or filename.casefold() in {"001.mp4", "3932954021832974372.mp4"}):
         raise RuntimeError("Choose an eligible plain MP4 filename; paths and previously excluded files are refused.")
     return filename
 
 
 def download(filename: str, destination: Path) -> None:
+    import dropbox
+    from dropbox.exceptions import ApiError, AuthError
+
     dbx = dropbox.Dropbox(oauth2_refresh_token=env("DROPBOX_REFRESH_TOKEN"), app_key=env("DROPBOX_APP_KEY"))
     destination.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -64,6 +58,12 @@ def download(filename: str, destination: Path) -> None:
 
 
 def youtube_client():
+    from google.auth.exceptions import RefreshError
+    from google.auth.transport.requests import Request
+    from google.oauth2.credentials import Credentials
+    from googleapiclient.discovery import build
+    from googleapiclient.errors import HttpError
+
     credentials = Credentials(None, refresh_token=env("YOUTUBE_REFRESH_TOKEN"),
                               token_uri="https://oauth2.googleapis.com/token", client_id=env("YOUTUBE_CLIENT_ID"),
                               client_secret=env("YOUTUBE_CLIENT_SECRET"), scopes=SCOPES)
@@ -84,6 +84,8 @@ def youtube_client():
 
 
 def already_uploaded(api, channel_id: str, title: str) -> None:
+    from googleapiclient.errors import HttpError
+
     try:
         result = api.search().list(part="id", forMine=True, type="video", maxResults=50, q=title).execute()
         for item in result.get("items", []):
@@ -97,15 +99,15 @@ def already_uploaded(api, channel_id: str, title: str) -> None:
 
 
 def run(filename: str, title: str, description: str):
+    from googleapiclient.http import MediaFileUpload
+
     filename = validate_filename(filename)
     title, description = title.strip(), description.strip()
     if not title or len(title) > 100 or not description:
         raise RuntimeError("Provide human-reviewed, non-empty title and description (title maximum 100 characters).")
-    if re.fullmatch(r"\d+", title) or re.fullmatch(r"\d+", Path(filename).stem):
+    if re.fullmatch(r"\\d+", title) or re.fullmatch(r"\\d+", Path(filename).stem):
         raise RuntimeError("Numeric-only titles are refused. Enter metadata reviewed against the actual video content.")
 
-    # Reservation is written before network actions. Any later failure remains reserved,
-    # which blocks automatic retry until a person reconciles the outcome.
     transition(filename, "reserve")
     video_path = Path("work/private-test-video.mp4")
     try:
