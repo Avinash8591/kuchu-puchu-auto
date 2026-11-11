@@ -1,0 +1,108 @@
+name: YouTube private test upload
+
+on:
+  workflow_dispatch:
+    inputs:
+      dropbox_filename:
+        description: Exact MP4 filename from the Dropbox publishing folder (for example, 001.mp4)
+        required: true
+        type: string
+      title:
+        description: YouTube video title
+        required: true
+        type: string
+      description:
+        description: YouTube video description
+        required: true
+        type: string
+      privacy:
+        description: Test visibility (public is intentionally unavailable)
+        required: true
+        type: choice
+        options:
+          - private
+          - unlisted
+      audience:
+        description: Type not_made_for_kids to confirm this upload is not directed at children
+        required: true
+        type: string
+      confirm_upload:
+        description: Type UPLOAD to confirm one private or unlisted test upload
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: youtube-private-test-upload
+  cancel-in-progress: false
+
+jobs:
+  upload-one:
+    # Manual dispatch only. This workflow has no schedule or public visibility option.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Validate explicit upload and audience confirmations
+        env:
+          CONFIRM_UPLOAD: ${{ inputs.confirm_upload }}
+          AUDIENCE: ${{ inputs.audience }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$CONFIRM_UPLOAD" != "UPLOAD" ]]; then
+            echo "::error::Type UPLOAD in the confirmation field to proceed."
+            exit 1
+          fi
+          if [[ "$AUDIENCE" != "not_made_for_kids" ]]; then
+            echo "::error::This test workflow requires explicit Not Made for Kids confirmation."
+            exit 1
+          fi
+
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install upload dependencies
+        run: python -m pip install --disable-pip-version-check google-api-python-client google-auth google-auth-oauthlib dropbox requests
+
+      - name: Verify required secrets are present
+        env:
+          DROPBOX_APP_KEY: ${{ secrets.DROPBOX_APP_KEY }}
+          DROPBOX_REFRESH_TOKEN: ${{ secrets.DROPBOX_REFRESH_TOKEN }}
+          YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in DROPBOX_APP_KEY DROPBOX_REFRESH_TOKEN YOUTUBE_CLIENT_ID YOUTUBE_CLIENT_SECRET YOUTUBE_REFRESH_TOKEN; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "::error::Required secret $name is missing."
+              exit 1
+            fi
+          done
+          echo "All required secrets are present (values were not printed)."
+
+      - name: Download exactly one selected video from Dropbox
+        env:
+          DROPBOX_APP_KEY: ${{ secrets.DROPBOX_APP_KEY }}
+          DROPBOX_REFRESH_TOKEN: ${{ secrets.DROPBOX_REFRESH_TOKEN }}
+          DROPBOX_FILENAME: ${{ inputs.dropbox_filename }}
+        run: python scripts/youtube_test_upload.py download
+
+      - name: Verify YouTube account and upload with restricted visibility
+        env:
+          YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
+          YOUTUBE_PRIVACY: ${{ inputs.privacy }}
+          VIDEO_TITLE: ${{ inputs.title }}
+          VIDEO_DESCRIPTION: ${{ inputs.description }}
+          VIDEO_FILE: work/test-video.mp4
+        run: python scripts/youtube_test_upload.py upload
