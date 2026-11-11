@@ -50,12 +50,11 @@ def load_manifest() -> list[dict]:
         rows = list(csv.DictReader(f))
     if len(rows) != 10 or [r.get("filename") for r in rows] != EXPECTED:
         raise RuntimeError("Manifest must contain the exact reviewed 10-file batch in order.")
-    seen: set[str] = set()
+    seen = set()
     for i, row in enumerate(rows):
         if row.get("batch_order") != str(i + 1):
             raise RuntimeError("Batch order is invalid.")
-        title = row.get("title", "").strip()
-        if not title or len(title) > 100:
+        if not row.get("title", "").strip() or len(row["title"]) > 100:
             raise RuntimeError(f"Missing or overlong title for {row['filename']}.")
         if not row.get("description", "").strip() or not row.get("tags", "").strip():
             raise RuntimeError(f"Description or tags are missing for {row['filename']}.")
@@ -164,15 +163,13 @@ def youtube_client():
     return yt, channels[0]["contentDetails"]["relatedPlaylists"]["uploads"]
 
 
-def check_schedule_collisions(yt, uploads_playlist: str, rows: list[dict]) -> None:
-    # The published batch CSV already reports conflicts with master rows 1–10.
-    # This hard stop remains until a reviewed manifest resolves those conflicts.
+def check_schedule_collisions(yt, playlist: str, rows: list[dict]) -> None:
     if any("Conflicts with master schedule row" in r.get("review_notes", "") for r in rows):
         raise RuntimeError("Manifest still conflicts with master schedule rows 1–10; update and review it before upload.")
     ids, token = [], None
     try:
         while True:
-            page = yt.playlistItems().list(part="contentDetails", playlistId=uploads_playlist,
+            page = yt.playlistItems().list(part="contentDetails", playlistId=playlist,
                                            maxResults=50, pageToken=token).execute()
             ids.extend(x["contentDetails"]["videoId"] for x in page.get("items", []))
             token = page.get("nextPageToken")
@@ -203,16 +200,16 @@ def verify_video(yt, video_id: str, row: dict) -> dict:
     video = items[0]
     snippet, status = video.get("snippet", {}), video.get("status", {})
     expected = datetime.fromisoformat(row["scheduled_utc"].replace("Z", "+00:00"))
-    text = status.get("publishAt")
+    publish = status.get("publishAt")
     if snippet.get("channelId") != CHANNEL_ID or snippet.get("title") != row["title"]:
         raise RuntimeError(f"Channel/title verification failed for {video_id}.")
-    if status.get("privacyStatus") != "private" or not text:
+    if status.get("privacyStatus") != "private" or not publish:
         raise RuntimeError(f"Scheduled private status not confirmed for {video_id}.")
-    actual = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    actual = datetime.fromisoformat(publish.replace("Z", "+00:00"))
     if abs((actual - expected).total_seconds()) > 60:
         raise RuntimeError(f"Scheduled time verification failed for {video_id}.")
     return {"video_id": video_id, "upload_status": "scheduled_verified",
-            "privacy_status": "private", "publish_at_utc": text,
+            "privacy_status": "private", "publish_at_utc": publish,
             "channel_id": CHANNEL_ID, "verified_at_utc": datetime.now(UTC).isoformat()}
 
 
@@ -224,14 +221,13 @@ def main():
         raise RuntimeError("Exact public-scheduling approval phrase is required.")
     rows = load_manifest()
     ledger = load_ledger()
-    for row in rows:
-        state = ledger["items"].get(row["filename"], {})
-        if state.get("video_id") or state.get("upload_status") in {"uploading", "uncertain"}:
-            raise RuntimeError(f"{row['filename']} exists in ledger; reconcile before retry.")
+    prior_names = set(ledger["items"])
+    if prior_names:
+        raise RuntimeError("Existing ledger entries require reconciliation before continuation.")
     files = download_sources(rows)
     yt, playlist = youtube_client()
     check_schedule_collisions(yt, playlist, rows)
-    print("Preflight passed: files, metadata, dates, OAuth channel/scopes, schedule checks.")
+    print("Preflight passed: Dropbox sources, metadata, dates, OAuth channel/scopes, and collision checks.")
     if mode == "preflight":
         print("Preflight only; no YouTube videos were uploaded or scheduled.")
         return
@@ -248,7 +244,7 @@ def main():
             "status": {"privacyStatus": "private", "publishAt": row["scheduled_utc"],
                        "selfDeclaredMadeForKids": True},
         }
-        request = yt.videos().insert(
+        upload = yt.videos().insert(
             part="snippet,status", body=body,
             media_body=MediaFileUpload(str(files[name]), mimetype="video/mp4",
                                        chunksize=8 * 1024 * 1024, resumable=True),
@@ -256,7 +252,7 @@ def main():
         response = None
         try:
             while response is None:
-                _, response = request.next_chunk()
+                _, response = upload.next_chunk()
         except Exception as exc:
             entry["upload_status"] = "uncertain"
             entry["last_error_type"] = type(exc).__name__
