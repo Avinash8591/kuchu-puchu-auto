@@ -1,0 +1,1 @@
+work/\n*.manifest.json\n*.state.json\n.token.json\nclient_secret*.json\n
