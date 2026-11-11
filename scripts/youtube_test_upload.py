@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Download one explicitly selected Dropbox MP4 and upload it to YouTube privately.
+"""Download one selected Dropbox MP4 and upload it to YouTube privately.
 
 This is a one-off verification helper, not a publishing queue processor. It
 never chooses a filename, never schedules publishing, and refuses public
@@ -39,7 +39,7 @@ def download_one() -> None:
     filename = required_env("DROPBOX_FILENAME")
     if (
         Path(filename).name != filename
-        or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 ._()-]*\.mp4", filename, re.IGNORECASE)
+        or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 ._()-]*\\.mp4", filename, re.IGNORECASE)
         or filename in {".", ".."}
     ):
         raise RuntimeError("Filename must be one plain MP4 filename; paths and other extensions are refused.")
@@ -58,15 +58,17 @@ def download_one() -> None:
             raise RuntimeError("Dropbox did not return a file for the selected path.")
         if metadata.size <= 0:
             raise RuntimeError("Selected Dropbox file is empty.")
+        bytes_written = 0
         with destination.open("wb") as output:
             for chunk in response.iter_content(chunk_size=1024 * 1024):
                 if chunk:
                     output.write(chunk)
+                    bytes_written += len(chunk)
+        if bytes_written != metadata.size:
+            raise RuntimeError("Downloaded video size did not match Dropbox metadata.")
     except (AuthError, ApiError) as exc:
         raise RuntimeError("Dropbox authentication or file download failed; verify secrets and the exact filename.") from exc
 
-    if not destination.exists() or destination.stat().st_size == 0:
-        raise RuntimeError("Dropbox download completed without a usable local video.")
     print(f"Downloaded selected file {filename!r} ({destination.stat().st_size} bytes).")
 
 
@@ -86,10 +88,10 @@ def build_youtube():
             "YouTube OAuth refresh failed. Re-authorize with both required scopes, then update the GitHub secret."
         ) from exc
 
-    granted = set(credentials.granted_scopes or credentials.scopes or [])
+    granted = set(credentials.granted_scopes or [])
     if not set(UPLOAD_SCOPES + READONLY_SCOPES).issubset(granted):
         raise RuntimeError(
-            "The YouTube refresh token lacks the upload and/or channel-read scope. Re-authorize with both scopes before uploading."
+            "Google did not confirm both required scopes for this token. Re-authorize with both scopes before uploading."
         )
 
     youtube = build("youtube", "v3", credentials=credentials, cache_discovery=False)
