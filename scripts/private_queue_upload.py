@@ -7,6 +7,13 @@ import re
 import sys
 from pathlib import Path
 
+# Executing this file as ``python scripts/private_queue_upload.py`` puts only
+# scripts/ on sys.path. Add the checkout root so queue_scheduler imports resolve
+# identically in GitHub Actions and local CLI checks.
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+if str(REPOSITORY_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPOSITORY_ROOT))
+
 import dropbox
 from dropbox.exceptions import ApiError, AuthError
 from google.auth.exceptions import RefreshError
@@ -102,29 +109,25 @@ def run(filename: str, title: str, description: str):
     transition(filename, "reserve")
     video_path = Path("work/private-test-video.mp4")
     try:
+        download(filename, video_path)
+        api, channel = youtube_client()
+        already_uploaded(api, channel["id"], title)
+        body = {"snippet": {"title": title, "description": description, "categoryId": "22"},
+                "status": {"privacyStatus": "private"}}
+        request = api.videos().insert(part="snippet,status", body=body,
+                                      media_body=MediaFileUpload(str(video_path), mimetype="video/mp4", chunksize=8 * 1024 * 1024, resumable=True))
+        response = None
         try:
-            download(filename, video_path)
-            api, channel = youtube_client()
-            already_uploaded(api, channel["id"], title)
-            body = {"snippet": {"title": title, "description": description, "categoryId": "22"},
-                    "status": {"privacyStatus": "private"}}
-            request = api.videos().insert(part="snippet,status", body=body,
-                                          media_body=MediaFileUpload(str(video_path), mimetype="video/mp4", chunksize=8 * 1024 * 1024, resumable=True))
-            response = None
-            try:
-                while response is None:
-                    _, response = request.next_chunk()
-            except Exception as exc:
-                raise RuntimeError("Upload outcome is uncertain; item remains reserved. Check YouTube Studio before any retry.") from exc
-            video_id = response.get("id")
-            if not video_id:
-                raise RuntimeError("No video ID confirmed; item remains reserved. Check YouTube Studio before any retry.")
-            transition(filename, "complete", video_id)
-            print(f"Private upload confirmed for reviewed filename {filename!r}; video ID {video_id}.")
-            print("No schedule was set. Verify visibility in YouTube Studio before considering any separate next step.")
-        except Exception:
-            # Preserve the reservation as the durable fail-closed lock; never reset it automatically.
-            raise
+            while response is None:
+                _, response = request.next_chunk()
+        except Exception as exc:
+            raise RuntimeError("Upload outcome is uncertain; item remains reserved. Check YouTube Studio before any retry.") from exc
+        video_id = response.get("id")
+        if not video_id:
+            raise RuntimeError("No video ID confirmed; item remains reserved. Check YouTube Studio before any retry.")
+        transition(filename, "complete", video_id)
+        print(f"Private upload confirmed for reviewed filename {filename!r}; video ID {video_id}.")
+        print("No schedule was set. Verify visibility in YouTube Studio before considering any separate next step.")
     finally:
         video_path.unlink(missing_ok=True)
 
