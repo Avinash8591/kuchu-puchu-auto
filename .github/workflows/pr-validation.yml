@@ -57,13 +57,26 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
+          import yaml
 
-          text = Path(".github/workflows/pr-validation.yml").read_text(encoding="utf-8")
-          assert "workflow_dispatch:" in text and "pull_request:" in text
-          assert "contents: read" in text
-          assert "secrets." not in text
-          assert "private_queue_upload.py" not in text
-          assert "youtube-upload" not in text.lower()
-          assert "schedule:" not in text
-          print("Validation workflow has read-only permissions, no secrets, and no upload/schedule trigger.")
+          workflow = yaml.load(Path(".github/workflows/pr-validation.yml").read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
+          triggers = workflow["on"]
+          assert set(triggers) == {"pull_request", "workflow_dispatch"}
+          assert workflow["permissions"] == {"contents": "read"}
+          steps = workflow["jobs"]["validate"]["steps"]
+          assert all(not step.get("uses", "").startswith("./.github/workflows/") for step in steps)
+
+          def values(value):
+              if isinstance(value, dict):
+                  for key, item in value.items():
+                      yield from values(key)
+                      yield from values(item)
+              elif isinstance(value, list):
+                  for item in value:
+                      yield from values(item)
+              elif isinstance(value, str):
+                  yield value
+
+          assert not any("${{ secrets." in value for value in values(workflow))
+          print("Validation workflow has no upload trigger, reusable upload workflow, write permission, or secret reference.")
           PY
