@@ -44,11 +44,9 @@ def download_one() -> None:
     ):
         raise RuntimeError("Filename must be one plain MP4 filename; paths and other extensions are refused.")
 
-    app_key = required_env("DROPBOX_APP_KEY")
-    refresh_token = required_env("DROPBOX_REFRESH_TOKEN")
     dbx = dropbox.Dropbox(
-        oauth2_refresh_token=refresh_token,
-        app_key=app_key,
+        oauth2_refresh_token=required_env("DROPBOX_REFRESH_TOKEN"),
+        app_key=required_env("DROPBOX_APP_KEY"),
     )
     remote_path = f"{DROPBOX_FOLDER}/{filename}"
     destination = Path("work/test-video.mp4")
@@ -73,26 +71,21 @@ def download_one() -> None:
 
 
 def build_youtube():
-    client_id = required_env("YOUTUBE_CLIENT_ID")
-    client_secret = required_env("YOUTUBE_CLIENT_SECRET")
-    refresh_token = required_env("YOUTUBE_REFRESH_TOKEN")
     credentials = Credentials(
         token=None,
-        refresh_token=refresh_token,
+        refresh_token=required_env("YOUTUBE_REFRESH_TOKEN"),
         token_uri="https://oauth2.googleapis.com/token",
-        client_id=client_id,
-        client_secret=client_secret,
+        client_id=required_env("YOUTUBE_CLIENT_ID"),
+        client_secret=required_env("YOUTUBE_CLIENT_SECRET"),
         scopes=UPLOAD_SCOPES + READONLY_SCOPES,
     )
     try:
         credentials.refresh(Request())
     except RefreshError as exc:
         raise RuntimeError(
-            "YouTube OAuth refresh failed. The saved refresh token may not include the read-only channel verification scope."
+            "YouTube OAuth refresh failed. Re-authorize with both required scopes, then update the GitHub secret."
         ) from exc
 
-    # A stored OAuth grant may have narrower scopes than requested above. Check
-    # the actual grant before making an upload request.
     granted = set(credentials.granted_scopes or credentials.scopes or [])
     if not set(UPLOAD_SCOPES + READONLY_SCOPES).issubset(granted):
         raise RuntimeError(
@@ -144,8 +137,6 @@ def upload_one() -> None:
         while response is None:
             _, response = request.next_chunk()
     except HttpError as exc:
-        # Do not retry automatically: a lost final response can make upload
-        # completion ambiguous and a second insert could create a duplicate.
         raise RuntimeError(
             "YouTube upload failed or its final status is uncertain. Check YouTube Studio before retrying to avoid duplicates."
         ) from exc
