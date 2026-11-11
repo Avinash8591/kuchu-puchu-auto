@@ -22,6 +22,12 @@ if not matches:
     raise FileNotFoundError(
         "Could not find client_secret*.json in your Downloads folder."
     )
+if len(matches) > 1:
+    filenames = ", ".join(path.name for path in matches)
+    raise RuntimeError(
+        "More than one OAuth client file was found in Downloads: "
+        f"{filenames}. Keep the intended file there and move the others elsewhere."
+    )
 
 CLIENT_SECRET_FILE = matches[0]
 OUTPUT_FILE = DOWNLOADS / "youtube_token.json"
@@ -42,9 +48,7 @@ if not credentials.refresh_token:
         "GitHub secret. Check OAuth consent and try again."
     )
 
-# Persist locally only; never print the token or add this file to the repository.
 OUTPUT_FILE.write_text(credentials.to_json(), encoding="utf-8")
-
 saved = json.loads(OUTPUT_FILE.read_text(encoding="utf-8"))
 if not saved.get("refresh_token"):
     raise RuntimeError("The saved credentials file does not contain a refresh token.")
