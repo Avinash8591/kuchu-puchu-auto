@@ -75,6 +75,7 @@ jobs:
               elif isinstance(value, str):
                   yield value
 
-          assert not any("${{ secrets." in value for value in values(workflow))
+          secret_prefix = "${{ " + "sec" + "rets."
+          assert not any(secret_prefix in value for value in values(workflow))
           print("Validation workflow has no upload trigger, reusable upload workflow, write permission, or secret reference.")
           PY
