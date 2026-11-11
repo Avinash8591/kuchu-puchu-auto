@@ -1,0 +1,71 @@
+name: Kuchu Puchu first batch scheduler
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Preflight checks sources and settings only; scheduled items automatically become public at their dates
+        required: true
+        type: choice
+        options:
+          - preflight
+          - schedule
+      approval:
+        description: For live public scheduling only, enter APPROVE FIRST BATCH PUBLIC SCHEDULE after reviewing the PR
+        required: false
+        type: string
+      ledger_artifact_name:
+        description: Existing ledger artifact name when continuing a partial batch
+        required: false
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: kuchu-puchu-first-batch-scheduler
+  cancel-in-progress: false
+
+jobs:
+  batch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Download prior ledger when continuing
+        if: ${{ inputs.ledger_artifact_name != '' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.ledger_artifact_name }}
+          path: state
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned API dependencies
+        run: python -m pip install --disable-pip-version-check 'dropbox==12.0.2' 'google-api-python-client==2.149.0' 'google-auth==2.35.0' 'google-auth-httplib2==0.2.0'
+
+      - name: Run guarded batch workflow
+        env:
+          RUN_MODE: ${{ inputs.mode }}
+          APPROVE_PUBLIC_SCHEDULING: ${{ inputs.approval }}
+          DROPBOX_APP_KEY: ${{ secrets.DROPBOX_APP_KEY }}
+          DROPBOX_REFRESH_TOKEN: ${{ secrets.DROPBOX_REFRESH_TOKEN }}
+          YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
+        run: python scripts/youtube_batch_scheduler.py
+
+      - name: Save resumable upload ledger
+        if: always() && hashFiles('state/batch-01-ledger.json') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: kuchu-puchu-batch-01-ledger-${{ github.run_id }}
+          path: state/batch-01-ledger.json
+          if-no-files-found: error
+          retention-days: 90
