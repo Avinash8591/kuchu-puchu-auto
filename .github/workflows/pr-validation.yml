@@ -26,8 +26,10 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install YAML parser
-        run: python -m pip install --disable-pip-version-check PyYAML
+      - name: Install parser and import dependencies
+        run: >-
+          python -m pip install --disable-pip-version-check
+          PyYAML dropbox google-api-python-client google-auth
 
       - name: Compile Python files
         run: python -m py_compile queue_scheduler/cloud_state.py scripts/private_queue_upload.py
@@ -35,7 +37,7 @@ jobs:
       - name: Check direct script import path
         run: python scripts/private_queue_upload.py --help
 
-      - name: Validate workflow YAML
+      - name: Validate upload workflow YAML
         run: python -c "import yaml; yaml.safe_load(open('.github/workflows/private-youtube-test.yml', encoding='utf-8')); print('Upload workflow YAML: valid')"
 
       - name: Validate queue state JSON schema
