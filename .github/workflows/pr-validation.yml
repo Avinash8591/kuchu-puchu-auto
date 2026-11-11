@@ -1,0 +1,67 @@
+name: PR validation (no services)
+
+on:
+  pull_request:
+    paths:
+      - "queue_scheduler/cloud_state.py"
+      - "scripts/private_queue_upload.py"
+      - ".github/workflows/private-youtube-test.yml"
+      - ".github/workflows/pr-validation.yml"
+      - "queue-state/state.json"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install YAML parser
+        run: python -m pip install --disable-pip-version-check PyYAML
+
+      - name: Compile Python files
+        run: python -m py_compile queue_scheduler/cloud_state.py scripts/private_queue_upload.py
+
+      - name: Check direct script import path
+        run: python scripts/private_queue_upload.py --help
+
+      - name: Validate workflow YAML
+        run: python -c "import yaml; yaml.safe_load(open('.github/workflows/private-youtube-test.yml', encoding='utf-8')); print('Upload workflow YAML: valid')"
+
+      - name: Validate queue state JSON schema
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          state = json.loads(Path("queue-state/state.json").read_text(encoding="utf-8"))
+          assert isinstance(state, dict), "state must be an object"
+          assert state.get("schema_version") == 1, "schema_version must be 1"
+          assert isinstance(state.get("items"), dict), "items must be an object"
+          print("Queue state JSON and schema: valid")
+          PY
+
+      - name: Assert this workflow cannot upload
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          text = Path(".github/workflows/pr-validation.yml").read_text(encoding="utf-8")
+          assert "workflow_dispatch:" in text and "pull_request:" in text
+          assert "contents: read" in text
+          assert "secrets." not in text
+          assert "private_queue_upload.py" not in text
+          assert "youtube-upload" not in text.lower()
+          assert "schedule:" not in text
+          print("Validation workflow has read-only permissions, no secrets, and no upload/schedule trigger.")
+          PY
