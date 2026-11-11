@@ -22,6 +22,16 @@ on:
         options:
           - private
           - unlisted
+      audience:
+        description: Confirm this upload is not directed at children
+        required: true
+        type: choice
+        options:
+          - not_made_for_kids
+      confirm_upload:
+        description: Type UPLOAD to confirm one private or unlisted test upload
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -36,6 +46,22 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
+      - name: Validate explicit upload and audience confirmations
+        env:
+          CONFIRM_UPLOAD: ${{ inputs.confirm_upload }}
+          AUDIENCE: ${{ inputs.audience }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$CONFIRM_UPLOAD" != "UPLOAD" ]]; then
+            echo "::error::Type UPLOAD in the confirmation field to proceed."
+            exit 1
+          fi
+          if [[ "$AUDIENCE" != "not_made_for_kids" ]]; then
+            echo "::error::This test workflow requires explicit Not Made for Kids confirmation."
+            exit 1
+          fi
+
       - name: Check out repository
         uses: actions/checkout@v4
 
